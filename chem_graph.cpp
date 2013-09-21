@@ -23,7 +23,7 @@
  SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  
  Needs boost with graph library and graphviz installed
- compile: g++ chem_graph.cpp
+ compile: g++ -std=c++11 chem_graph.cpp
 */
 
 #include <iostream>
