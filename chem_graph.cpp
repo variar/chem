@@ -122,13 +122,16 @@ public:
   size_t CountConnections(const VertexFilter& filter) const
   {
     std::vector<Vertex> vertices = findAll(filter);
-    
+        
     size_t result = 0;
-    for (size_t i=0; i<vertices.size()-1; ++i)
+    if (!vertices.empty())
     {
-      for (size_t j=i+1; j<vertices.size(); ++j)
+      for (size_t i=0; i<vertices.size()-1; ++i)
       {
-	result += Distance(vertices[i], vertices[j]);
+	for (size_t j=i+1; j<vertices.size(); ++j)
+	{
+	  result += Distance(vertices[i], vertices[j]);
+	}
       }
     }
     
@@ -312,6 +315,9 @@ public:
       std::string calculation;
       std::getline(file, calculation);
       
+      if (calculation.empty())
+	continue;
+      
       size_t splitPos = calculation.find("-");
       if (splitPos != std::string::npos)
       {
@@ -404,18 +410,12 @@ int main(int argc, char** argv)
   {
     std::string formula;
     std::getline(inFile, formula);
+    
+    if (formula.empty()) continue;
+    
     formulaCount++;
     
-    outFile << formulaCount << '\t' << formula;
-    
     Molecule m(formula);
-    
-    std::vector<size_t> results = calculator.calculate(m);
-    
-    for (auto it = results.cbegin(); it != results.cend(); ++it)
-    {
-      outFile << '\t' << *it;
-    }
     
     std::string dotFileName = (boost::format("%1%_%2%.dot") % filePrefix % formulaCount).str();
     std::string pngFileName = (boost::format("%1%_%2%.png") % filePrefix % formulaCount).str();
@@ -425,6 +425,15 @@ int main(int argc, char** argv)
     dotFile.close();
     
     std::system((boost::format("dot -Tpng -o %1% %2%") % pngFileName % dotFileName).str().c_str());
+    
+    outFile << formulaCount << '\t' << formula;
+    std::vector<size_t> results = calculator.calculate(m);
+    
+    for (auto it = results.cbegin(); it != results.cend(); ++it)
+    {
+      outFile << '\t' << *it;
+    }
+    outFile << std::endl;
   }
   
   inFile.close();
