@@ -36,6 +36,7 @@
 #include <boost/graph/graphviz.hpp>
 #include <boost/optional.hpp>
 #include <boost/format.hpp>
+#include <boost/algorithm/string/predicate.hpp>
 
 struct VertexInfo
 {
@@ -47,12 +48,50 @@ typedef boost::property<boost::edge_weight_t, int> EdgeWeight;
 typedef boost::adjacency_list<boost::vecS, boost::vecS, boost::undirectedS, VertexInfo, EdgeWeight> Graph;
 typedef Graph::vertex_descriptor Vertex; 
 
+// Структура описывает фильтр для вершины.
+// Под фильтр попадает вершина, если ее имя начинается с Prefix
+// и число соединений равно Connections.
 struct VertexFilter
 {
-  VertexFilter(const std::string& elements, int connections = 1)
-  :Elements(elements),Connections(connections){}
+  VertexFilter(const std::string& prefix, int connections)
+  :Prefix(prefix),Connections(connections){}
   
-  std::string Elements;
+  VertexFilter(const std::string& filter):Connections(0)
+  {
+    size_t numPos = filter.find_first_of("1234567890");
+    
+    Prefix = filter.substr(0, numPos);
+    
+    if (numPos != std::string::npos)
+    {
+      Connections = atoi(filter.substr(numPos).c_str());
+    }
+  }
+  
+  bool match(const Vertex& v, const Graph& graph)
+  {
+    int vConnections = boost::in_degree(v,  graph); // число ребер для вершины v
+    
+    return ((Connections == 0 || vConnections == Connections) 
+    && (Prefix.empty() || boost::starts_with(graph[v].name, Prefix)));
+  }
+  
+  bool operator==(const VertexFilter& other) const
+  {
+    return Prefix == other.Prefix && Connections == other.Connections;
+  }
+  
+  friend std::ostream& operator<<(std::ostream& stream, const VertexFilter& filter)
+  {
+    stream << filter.Prefix;
+    if (filter.Connections>0)
+    {
+      stream << filter.Connections;
+    }
+    return stream;
+  }
+  
+  std::string Prefix;
   int Connections;
 };
 
@@ -67,22 +106,22 @@ public:
   
   // Записывает в выходной поток граф в формате graphviz (на языке dot)
   // Потом можно построить картинку с помощью программы dot
-  void WriteGraphviz(std::ostream& out)
+  void WriteGraphviz(std::ostream& out) const
   {
     boost::write_graphviz(out, _graph, boost::make_label_writer(boost::get(&VertexInfo::name, _graph)));
   }
   
-  size_t VertexCount()
+  size_t CountVertices(const VertexFilter& filter) const
   {
-    return num_vertices(_graph);
+    std::vector<Vertex> vertices = findAll(filter);
+    return vertices.size();
   }
   
-  // Считает все связи между атомами, перечисленными в строке elements,
-  // у которых число связей равно connections.
-  // Для CH3 или OH connections = 1, для CH2 -- 2 и т.д.
-  size_t CountAllConnections(int connections, const std::string& elements)
+  // Cчитает число связей между узлами, подходящими под фильтр.
+  // Подходит для расчета Cn-Cn. Не походит для Cn-Cm, где n != m
+  size_t CountConnections(const VertexFilter& filter) const
   {
-    std::vector<Vertex> vertices = findAll(connections, elements);
+    std::vector<Vertex> vertices = findAll(filter);
     
     size_t result = 0;
     for (size_t i=0; i<vertices.size()-1; ++i)
@@ -96,10 +135,18 @@ public:
     return result;
   }
   
-  size_t CountConnections(const VertexFilter& from, const VertexFilter& to)
+  // Cчитает число связей от атомами, подходящими под фильтр from.
+  // до атомов, подходящих под фильтр to
+  // Подходит как для расчета Cn-Cm, где n != m, так и для Cn-Cn, Cn-OH и т.п.
+  size_t CountConnections(const VertexFilter& from, const VertexFilter& to) const
   {
-    std::vector<Vertex> fromVertices = findAll(from.Connections, from.Elements);
-    std::vector<Vertex> toVertices = findAll(to.Connections, to.Elements);
+    if (from == to)
+    {
+      return CountConnections(from);
+    }
+        
+    std::vector<Vertex> fromVertices = findAll(from);
+    std::vector<Vertex> toVertices = findAll(to);
     
     size_t result = 0;
     for (size_t i=0; i<fromVertices.size(); ++i)
@@ -202,35 +249,27 @@ private:
     _graph[*lastVertex].name = vertexName;
   }
   
-  // Ищет все узлы, которые соответствуют элементам из elements
+  // Ищет все узлы, назвиния которых начинаются с prefix
   // и имеют число связей равное connections
-  std::vector<Vertex> findAll(int connections, const std::string& elements)
+  std::vector<Vertex> findAll(const VertexFilter& filter) const
   {
-    // вспомогательная функция - предикат, которая позволяет отбирать узлы из графа
-    auto predicate = [this, connections, &elements](const Vertex& v) -> bool
-    {
-      int vConnections = boost::in_degree(v,  _graph); // число ребер для вершины v
-      char vElement = _graph[v].name.empty() ? '\0' : _graph[v].name[0];
-      
-      return (vConnections == connections && (elements.empty() || elements.find(vElement) != std::string::npos));
-    };
-    
     std::vector<Vertex> result;
     
     Graph::vertex_iterator vBegin, vEnd;
     boost::tie(vBegin, vEnd) = boost::vertices(_graph);
    
-    std::copy_if(vBegin, vEnd, std::back_inserter(result), predicate);
+    std::copy_if(vBegin, vEnd, std::back_inserter(result), 
+		 std::bind(&VertexFilter::match, filter, std::placeholders::_1, _graph));
     
     return result;
   }
   
   // Считает число ребер между двумя вершинами
   // Магия boost graph library
-  size_t Distance(Vertex v1, Vertex v2)
+  size_t Distance(Vertex v1, Vertex v2) const
   {
     std::vector<Vertex> predecessors;
-    predecessors.resize(VertexCount());
+    predecessors.resize(num_vertices(_graph));
     
     boost::breadth_first_search(_graph,
 				v1,
@@ -254,12 +293,91 @@ private:
   Graph _graph;
 };
 
+// Проводит группу вычислений с указанной молекулой
+// Вычисления счтитываются из файла.
+// Формат файла -- одно вычисление на одной строке.
+// Формат описания вычисления
+//  -- либо один фильтр вида <Prefix><Connections>, например C1,C4 или OH
+//  -- либо два фильтра вида <Prefix><Connections>-<Prefix><Connections>,
+//	например С1-С1, С1-С3, С2-OH
+// Для одиночных фильтров будет посчитано общее число таких вершин.
+// Для двойных -- число связей между вершинами, подходящими под первый и второй фильтр
+class Calculator
+{
+public:
+  Calculator(std::ifstream& file)
+  {
+    while(file.peek() != EOF)
+    {
+      std::string calculation;
+      std::getline(file, calculation);
+      
+      size_t splitPos = calculation.find("-");
+      if (splitPos != std::string::npos)
+      {
+	VertexFilter from(calculation.substr(0, splitPos));
+	VertexFilter to(calculation.substr(splitPos+1));
+	
+	_connectionCalcs.push_back(std::pair<VertexFilter, VertexFilter>(from,to));
+      }
+      else
+      {
+	_vertexCalcs.push_back(VertexFilter(calculation));
+      }
+    }
+  }
+  
+  // Печатает заголовок таблицы с перечислеием всех вычислений.
+  // Сначала идут вычисления для числа вершин,
+  // потом -- для числа связей.
+  // Порядок внутри каждой группы такой же, как во входном файле.
+  void printHeaders(std::ostream& stream, char delimiter = '\t') const
+  {
+    for (auto it = _vertexCalcs.cbegin(); it != _vertexCalcs.cend(); ++it)
+    {
+      stream << delimiter << *it;
+    }
+    
+    for (auto it = _connectionCalcs.cbegin(); it != _connectionCalcs.cend(); ++it)
+    {
+      stream << delimiter << it->first;
+      stream << "-" << it->second;
+    }
+  }
+  
+  // Возвращает набор результатов вычислений.
+  // Сначала идут вычисления для числа вершин,
+  // потом -- для числа связей.
+  // Порядок внутри каждой группы такой же, как во входном файле.
+  std::vector<size_t> calculate(const Molecule& m) const
+  {
+    std::vector<size_t> result;
+    
+    for (auto it = _vertexCalcs.cbegin(); it != _vertexCalcs.cend(); ++it)
+    {
+      result.push_back(m.CountVertices(*it));
+    }
+    
+    for (auto it = _connectionCalcs.cbegin(); it != _connectionCalcs.cend(); ++it)
+    {
+      result.push_back(m.CountConnections(it->first, it->second));
+    }
+    
+    return result;
+  }
+  
+private:
+  std::list<VertexFilter> _vertexCalcs;
+  std::list<std::pair<VertexFilter, VertexFilter>> _connectionCalcs;
+};
+
 int main(int argc, char** argv)
 {
-  if (argc < 2)
+  if (argc < 3)
   {
-    std::cout<<"Usage: prog filename"<<std::endl;
-    std::cout<<"filename -- file with formulas, one formula on each line"<<std::endl;
+    std::cout<<"Usage: prog formula_file calc_file "<<std::endl;
+    std::cout<<"formula_file -- file with formulas, one formula on each line"<<std::endl;
+    std::cout<<"calc_file -- file with parameters to calculate, one parameter on line"<<std::endl;
     std::cout<<"Program creates file filename.csv -- result of calculations"<<std::endl;
     std::cout<<"Program creates files filename_i.dot and filename_i.png -- images of graphs for each formula"<<std::endl;
     return 0;
@@ -269,11 +387,16 @@ int main(int argc, char** argv)
   
   std::ifstream inFile(argv[1]);
   
+  std::ifstream calcFile(argv[2]);
+  
+  Calculator calculator(calcFile);
+  
   std::ofstream outFile(filePrefix + "_out.csv");
-  
-  
+    
   // Заголовок таблицы в CSV
-  outFile << "N\tFormula\tC1-OH\tC2-OH\tC3-OH\tC4-OH"<<std::endl;
+  outFile << "N\tFormula";
+  calculator.printHeaders(outFile);
+  outFile<<std::endl;
   
   int formulaCount = 0;
   
@@ -283,16 +406,16 @@ int main(int argc, char** argv)
     std::getline(inFile, formula);
     formulaCount++;
     
-    Molecule m(formula);
-
-    outFile << formulaCount << "\t" << formula;
+    outFile << formulaCount << '\t' << formula;
     
-    VertexFilter filterOH("O",1);
-    for (size_t i = 1; i<5; ++i)
+    Molecule m(formula);
+    
+    std::vector<size_t> results = calculator.calculate(m);
+    
+    for (auto it = results.cbegin(); it != results.cend(); ++it)
     {
-      outFile << "\t" << m.CountConnections(VertexFilter("C",i), filterOH);
+      outFile << '\t' << *it;
     }
-    outFile << std::endl;
     
     std::string dotFileName = (boost::format("%1%_%2%.dot") % filePrefix % formulaCount).str();
     std::string pngFileName = (boost::format("%1%_%2%.png") % filePrefix % formulaCount).str();
@@ -305,6 +428,7 @@ int main(int argc, char** argv)
   }
   
   inFile.close();
+  calcFile.close();
   outFile.close();
   
   return 0;
