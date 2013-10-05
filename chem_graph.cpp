@@ -47,6 +47,15 @@ typedef boost::property<boost::edge_weight_t, int> EdgeWeight;
 typedef boost::adjacency_list<boost::vecS, boost::vecS, boost::undirectedS, VertexInfo, EdgeWeight> Graph;
 typedef Graph::vertex_descriptor Vertex; 
 
+struct VertexFilter
+{
+  VertexFilter(const std::string& elements, int connections = 1)
+  :Elements(elements),Connections(connections){}
+  
+  std::string Elements;
+  int Connections;
+};
+
 class Molecule
 {
 public:
@@ -75,12 +84,29 @@ public:
   {
     std::vector<Vertex> vertices = findAll(connections, elements);
     
-    int result = 0;
-    for (int i=0; i<vertices.size()-1; ++i)
+    size_t result = 0;
+    for (size_t i=0; i<vertices.size()-1; ++i)
     {
-      for (int j=i+1; j<vertices.size(); ++j)
+      for (size_t j=i+1; j<vertices.size(); ++j)
       {
 	result += Distance(vertices[i], vertices[j]);
+      }
+    }
+    
+    return result;
+  }
+  
+  size_t CountConnections(const VertexFilter& from, const VertexFilter& to)
+  {
+    std::vector<Vertex> fromVertices = findAll(from.Connections, from.Elements);
+    std::vector<Vertex> toVertices = findAll(to.Connections, to.Elements);
+    
+    size_t result = 0;
+    for (size_t i=0; i<fromVertices.size(); ++i)
+    {
+      for (size_t j=0; j<toVertices.size(); ++j)
+      {
+	result += Distance(fromVertices[i], toVertices[j]);
       }
     }
     
@@ -245,7 +271,9 @@ int main(int argc, char** argv)
   
   std::ofstream outFile(filePrefix + "_out.csv");
   
-  outFile << "N,Formula,C1-C1"<<std::endl;
+  
+  // Заголовок таблицы в CSV
+  outFile << "N\tFormula\tC1-OH\tC2-OH\tC3-OH\tC4-OH"<<std::endl;
   
   int formulaCount = 0;
   
@@ -257,7 +285,14 @@ int main(int argc, char** argv)
     
     Molecule m(formula);
 
-    outFile << formulaCount << "," << formula << "," << m.CountAllConnections(1, "CO") << std::endl;
+    outFile << formulaCount << "\t" << formula;
+    
+    VertexFilter filterOH("O",1);
+    for (size_t i = 1; i<5; ++i)
+    {
+      outFile << "\t" << m.CountConnections(VertexFilter("C",i), filterOH);
+    }
+    outFile << std::endl;
     
     std::string dotFileName = (boost::format("%1%_%2%.dot") % filePrefix % formulaCount).str();
     std::string pngFileName = (boost::format("%1%_%2%.png") % filePrefix % formulaCount).str();
